@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Yards Gained Visualization</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f8f8f8; margin: 0; padding: 0; }
+    .container { max-width: 1200px; margin: 40px auto; padding: 24px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    h1 { text-align: center; margin-bottom: 32px; }
+    .controls { text-align: center; margin-bottom: 32px; }
+    .plots { display: flex; justify-content: space-between; gap: 32px; }
+    .plot-area { flex: 1; background: #f4f4f4; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; align-items: center; }
+    .team-name { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
+    .team-logo { margin-top: 8px; height: 48px; }
+    canvas { background: #fff; border: 1px solid #ccc; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Packers Yards Gained vs. Opponents</h1>
+    <div class="controls">
+      <label for="week-select">Select Week:</label>
+      <select id="week-select"></select>
+    </div>
+    <div class="plots">
+      <div class="plot-area" id="plot1">
+        <div class="team-name" id="team1-name"></div>
+        <canvas id="canvas1" width="400" height="300"></canvas>
+        <img id="team1-logo" class="team-logo" src="" alt="Team 1 Logo">
+      </div>
+      <div class="plot-area" id="plot2">
+        <div class="team-name" id="team2-name"></div>
+        <canvas id="canvas2" width="400" height="300"></canvas>
+        <img id="team2-logo" class="team-logo" src="" alt="Team 2 Logo">
+      </div>
+    </div>
+  </div>
+  <script>
+    async function loadData() {
+      const response = await fetch('total_yards.json');
+      const text = await response.text();
+      // Parse newline-delimited JSON
+      return text.trim().split('\n').map(line => {
+        try { return JSON.parse(line); } catch { return null; }
+      }).filter(x => x);
+    }
+
+    function getUniqueWeeks(data) {
+      return [...new Set(data.map(d => d.week))].sort((a, b) => a - b);
+    }
+
+    function getTeamsForWeek(data, week) {
+      return [...new Set(data.filter(d => d.week == week).map(d => d.posteam))];
+    }
+
+    function getTeamData(data, week, team) {
+      return data.filter(d => d.week == week && d.posteam == team);
+    }
+
+    function getTeamInfo(data, week, team) {
+      const rec = data.find(d => d.week == week && d.posteam == team);
+      return rec ? {
+        name: rec.team_name,
+        logo: rec.team_logo_wikipedia || rec.team_logo,
+        color: rec.team_color
+      } : { name: '', logo: '', color: '#333' };
+    }
+
+    function plotLine(canvas, data, color) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Axes
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(40, 20); ctx.lineTo(40, 260); ctx.lineTo(380, 260); ctx.stroke();
+      // Axis labels
+      ctx.fillStyle = '#333';
+      ctx.font = '12px Arial';
+      ctx.fillText('Game Time', 180, 290);
+      ctx.save();
+      ctx.translate(10, 150); ctx.rotate(-Math.PI/2);
+      ctx.fillText('Total Yards', 0, 0);
+      ctx.restore();
+      // X axis ticks (0 to 60)
+      for (let i = 0; i <= 6; i++) {
+        const val = i * 10;
+        const xPos = 40 + (val / 60) * 340;
+        ctx.fillText(val, xPos - 10, 275);
+        ctx.beginPath();
+        ctx.moveTo(xPos, 260);
+        ctx.lineTo(xPos, 265);
+        ctx.stroke();
+      }
+      // Y axis ticks (0 to 500)
+      for (let i = 0; i <= 5; i++) {
+        const val = i * 100;
+        const yPos = 260 - (val / 500) * 220;
+        ctx.fillText(val, 5, yPos + 5);
+        ctx.beginPath();
+        ctx.moveTo(40, yPos);
+        ctx.lineTo(35, yPos);
+        ctx.stroke();
+      }
+      if (!data.length) return;
+      // Scale to fixed axes
+      function scaleX(x) {
+        return 40 + (Math.max(0, Math.min(60, x)) / 60) * 340;
+      }
+      function scaleY(y) {
+        return 260 - (Math.max(0, Math.min(500, y)) / 500) * 220;
+      }
+      // Line
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      data.forEach((d, i) => {
+        const x = scaleX(parseFloat(d.game_time));
+        const y = scaleY(parseFloat(d.total_yards_gained));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      // Points
+      ctx.fillStyle = color;
+      data.forEach(d => {
+        const x = scaleX(parseFloat(d.game_time));
+        const y = scaleY(parseFloat(d.total_yards_gained));
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, 2 * Math.PI); ctx.fill();
+      });
+    }
+
+    async function main() {
+      const data = await loadData();
+      const weekSelect = document.getElementById('week-select');
+      const weeks = getUniqueWeeks(data);
+      weeks.forEach(week => {
+        const opt = document.createElement('option');
+        opt.value = week; opt.textContent = 'Week ' + week;
+        weekSelect.appendChild(opt);
+      });
+      function updatePlots() {
+        const week = weekSelect.value;
+        let teams = getTeamsForWeek(data, week);
+        // Ensure Green Bay Packers (GB) is first
+        if (teams.includes('GB')) {
+          teams = ['GB', ...teams.filter(t => t !== 'GB')];
+        }
+        // If less than 2 teams, show empty
+        for (let i = 0; i < 2; i++) {
+          const plotId = 'plot' + (i+1);
+          const teamNameId = 'team' + (i+1) + '-name';
+          const teamLogoId = 'team' + (i+1) + '-logo';
+          const canvasId = 'canvas' + (i+1);
+          if (teams[i]) {
+            const teamData = getTeamData(data, week, teams[i]);
+            const info = getTeamInfo(data, week, teams[i]);
+            document.getElementById(teamNameId).textContent = info.name;
+            document.getElementById(teamLogoId).src = info.logo;
+            plotLine(document.getElementById(canvasId), teamData, info.color);
+          } else {
+            document.getElementById(teamNameId).textContent = '';
+            document.getElementById(teamLogoId).src = '';
+            plotLine(document.getElementById(canvasId), [], '#ccc');
+          }
+        }
+      }
+      weekSelect.addEventListener('change', updatePlots);
+      weekSelect.value = weeks[0];
+      updatePlots();
+    }
+    main();
+  </script>
+</body>
+</html>
